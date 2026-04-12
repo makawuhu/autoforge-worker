@@ -1,12 +1,16 @@
-# RunPod serverless worker for AutoForge
-# pytorch/pytorch:2.3.1-cuda12.1-cudnn8-devel is an official, well-known tag.
-# Targets RTX 3090 / 4090 / A40 / A100 (sm_86/sm_80) — cu121 covers all of these.
-FROM runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
+# Start from NVIDIA CUDA base — driver-agnostic, works with any CUDA 12.x host driver.
+# PyTorch cu121 wheels require driver >= 525, which all modern RunPod workers have.
+FROM nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y python3 python3-pip && rm -rf /var/lib/apt/lists/*
+
+RUN pip3 install --no-cache-dir \
+    torch --index-url https://download.pytorch.org/whl/cu121
+
+RUN pip3 install --no-cache-dir runpod AutoForge
 
 WORKDIR /app
-
-RUN pip install --no-cache-dir runpod AutoForge
-
 COPY handler.py .
 
-CMD ["python", "-u", "handler.py"]
+CMD ["python3", "-u", "handler.py"]
