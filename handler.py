@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """
-AutoForge RunPod Serverless Handler
+AutoForge Handler
 Receives image URL + config, runs AutoForge, uploads ZIP to GitHub releases.
 
+Supports two entry points:
+1. RunPod Serverless — runpod.start() passes events to handler()
+2. khris-gpu local — AUTOFORGE_CONFIG env var provides config as JSON
 Strictly stage-based, stateless, structured output.
 """
 
@@ -300,6 +303,51 @@ def handler(event):
             print(f"[cleanup] removed {work_dir}")
 
 
+# ── khris-gpu Entry Point ────────────────────────────────────────────────────
+
+def _run_from_env():
+    """
+    Entry point for khris-gpu (local GPU compute node).
+    Reads AUTOFORGE_CONFIG env var, builds an event dict, and calls handler().
+    """
+    config_json = os.environ.get("AUTOFORGE_CONFIG")
+    if not config_json:
+        print("[FAIL] AUTOFORGE_CONFIG env var not set. No job to run.")
+        return
+
+    try:
+        config = json.loads(config_json)
+    except json.JSONDecodeError as e:
+        print(f"[FAIL] AUTOFORGE_CONFIG is not valid JSON: {e}")
+        return
+
+    # Build an event dict that handler() understands
+    # Use a deterministic job_id from timestamp + pid
+    job_id = f"local-{int(time.time())}-{os.getpid()}"
+    event = {"id": job_id, "input": config}
+
+    print(f"[khris-gpu] Starting AutoForge job {job_id}")
+    print(f"[khris-gpu] Config: {json.dumps(config, indent=2)}")
+
+    result = handler(event)
+
+    # Print the result as JSON — the khris-gpu worker captures stdout
+    print(f"\n[khris-gpu] Result:")
+    print(json.dumps(result, indent=2))
+
+    # Exit with non-zero if the job failed
+    if not result.get("ok", False):
+        sys.exit(1)
+
+
 if __name__ == "__main__":
-    import runpod
-    runpod.serverless.start({"handler": handler})
+    # Detect which entry point to use
+    if os.environ.get("AUTOFORGE_CONFIG"):
+        # khris-gpu local compute node
+        import sys
+        import time
+        _run_from_env()
+    else:
+        # RunPod Serverless
+        import runpod
+        runpod.serverless.start({"handler": handler})
