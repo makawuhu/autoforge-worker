@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-AutoForge Runpod Serverless Handler
-Receives image URL + config, runs AutoForge, uploads ZIP to Gitea releases.
+AutoForge RunPod Serverless Handler
+Receives image URL + config, runs AutoForge, uploads ZIP to GitHub releases.
+
+Strictly stage-based, stateless, structured output.
 """
 
 import os
-import io
 import json
 import tempfile
 import zipfile
@@ -13,22 +14,50 @@ import shutil
 import urllib.request
 import urllib.parse
 from typing import Optional
-from pathlib import Path
 
 from autoforge_wrapper import AutoForgeWrapper
 
-# GitHub config for output hosting (publicly accessible)
-import base64
+# ── Config ──────────────────────────────────────────────────────────────────
 
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
-if not GITHUB_TOKEN:
-    raise RuntimeError("GITHUB_TOKEN environment variable not set")
 GITHUB_OWNER = os.environ.get("GITHUB_OWNER", "makawuhu")
 GITHUB_REPO = os.environ.get("GITHUB_REPO", "autoforge-worker")
 
+# ── Helpers ─────────────────────────────────────────────────────────────────
 
-def upload_to_github(zip_path: str, job_id: str, material_count: int, layer_count: int) -> str:
-    """Create a GitHub release and upload the ZIP. Returns the public download URL."""
+
+def _fail(stage: str, error: str, **extra) -> dict:
+    """Return a structured failure response."""
+    ret = {"ok": False, "stage": stage, "error": error}
+    ret.update(extra)
+    print(f"[FAIL] stage={stage} error={error}")
+    return ret
+
+
+def _ok(stage: str, **fields) -> dict:
+    """Return a structured success response."""
+    ret = {"ok": True, "stage": stage}
+    ret.update(fields)
+    return ret
+
+
+def _download_file(url: str, dest_dir: str) -> Optional[str]:
+    """Download a file to dest_dir, return local path or None."""
+    if not url:
+        return None
+    filename = url.split("/")[-1].split("?")[0] or "input_file"
+    dest = os.path.join(dest_dir, filename)
+    try:
+        urllib.request.urlretrieve(url, dest)
+        print(f"[download] {url} → {dest} ({os.path.getsize(dest)} bytes)")
+        return dest
+    except Exception as e:
+        print(f"[download] FAILED {url}: {e}")
+        return None
+
+
+def _upload_to_github(zip_path: str, job_id: str, material_count: int, layer_count: int) -> str:
+    """Create a GitHub release and upload the ZIP. Returns public download URL."""
     filename = os.path.basename(zip_path)
     tag_name = f"autoforge-{job_id[:12]}"
     release_name = f"AutoForge Output ({job_id[:8]})"
@@ -41,7 +70,7 @@ def upload_to_github(zip_path: str, job_id: str, material_count: int, layer_coun
 
     # Create release
     create_url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases"
-    create_payload = json.dumps({
+    payload = json.dumps({
         "tag_name": tag_name,
         "name": release_name,
         "body": release_body,
@@ -50,7 +79,7 @@ def upload_to_github(zip_path: str, job_id: str, material_count: int, layer_coun
     }).encode()
 
     req = urllib.request.Request(
-        create_url, data=create_payload,
+        create_url, data=payload,
         headers={
             "Content-Type": "application/json",
             "Authorization": f"token {GITHUB_TOKEN}",
@@ -61,18 +90,18 @@ def upload_to_github(zip_path: str, job_id: str, material_count: int, layer_coun
         release = json.loads(resp.read())
 
     release_id = release.get("id")
-    upload_url = release.get("upload_url", "").replace("{?name,label}", f"?name={urllib.parse.quote(filename)}")
+    upload_url = release.get("upload_url", "").replace(
+        "{?name,label}", f"?name={urllib.parse.quote(filename)}"
+    )
     html_url = release.get("html_url")
-
-    print(f"[GitHub] Created release {release_id} with tag {tag_name}")
+    print(f"[upload] Created release {release_id} tag={tag_name}")
 
     # Upload asset
     with open(zip_path, "rb") as f:
         zip_data = f.read()
 
     req = urllib.request.Request(
-        upload_url,
-        data=zip_data,
+        upload_url, data=zip_data,
         headers={
             "Content-Type": "application/zip",
             "Content-Length": str(len(zip_data)),
@@ -84,22 +113,11 @@ def upload_to_github(zip_path: str, job_id: str, material_count: int, layer_coun
         asset = json.loads(resp.read())
 
     download_url = asset.get("browser_download_url", html_url)
-    print(f"[GitHub] Asset URL: {download_url}")
+    print(f"[upload] Asset URL: {download_url}")
     return download_url
 
 
-def download_file(url: str, dest_dir: str) -> Optional[str]:
-    """Download a file to temp dir, return local path or None."""
-    if not url:
-        return None
-    filename = url.split("/")[-1].split("?")[0] or "input_file"
-    dest = os.path.join(dest_dir, filename)
-    try:
-        urllib.request.urlretrieve(url, dest)
-        return dest
-    except Exception as e:
-        print(f"Warning: failed to download {url}: {e}")
-        return None
+# ── Core Pipeline ──────────────────────────────────────────────────────────
 
 
 def run_autoforge(
@@ -115,14 +133,14 @@ def run_autoforge(
     flatforge: bool = False,
     cap_layers: int = 0,
 ) -> dict:
-    """Run AutoForge and return metadata."""
+    """Run AutoForge and return metadata dict."""
     if not csv_path or not os.path.exists(csv_path):
         raise FileNotFoundError(
             f"CSV file required for AutoForge but not found at: {csv_path}. "
             "Please provide a valid csv_url in the request."
         )
-    wrapper = AutoForgeWrapper(output_dir=output_dir)
 
+    wrapper = AutoForgeWrapper(output_dir=output_dir)
     result = wrapper.run(
         input_image=image_path,
         csv_file=csv_path,
@@ -135,23 +153,11 @@ def run_autoforge(
         flatforge=flatforge,
         cap_layers=cap_layers,
     )
+    print(f"[process] wrapper result keys: {list(result.keys())}")
+    print(f"[process] material_count={result.get('material_count')} layer_count={result.get('layer_count')}")
 
     # Package outputs into a zip
     zip_path = os.path.join(output_dir, "autoforge_output.zip")
-    
-    # Write diagnostic sidecar — this is never truncated by Runpod
-    import json as _json
-    diag = {
-        "run_autoforge_material_count": result.get("material_count", 0),
-        "run_autoforge_layer_count": result.get("layer_count", 0),
-        "run_autoforge_keys": list(result.keys()),
-        "voxel_dimensions": result.get("voxel_dimensions", {}),
-    }
-    diag_path = os.path.join(output_dir, "_diag.json")
-    with open(diag_path, 'w') as f:
-        _json.dump(diag, f)
-    print(f"[DEBUG ZIP] _diag.json contents: {diag}", flush=True)
-    
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for fname in os.listdir(output_dir):
             fpath = os.path.join(output_dir, fname)
@@ -164,7 +170,7 @@ def run_autoforge(
                     subpath = os.path.join(fpath, sub)
                     if os.path.isfile(subpath):
                         zf.write(subpath, os.path.join(fname, sub))
-    print(f"[DEBUG ZIP] zip created, files in zip: {os.listdir(output_dir)}", flush=True)
+    print(f"[package] zip created: {zip_path} ({os.path.getsize(zip_path)} bytes)")
 
     return {
         "zip_path": zip_path,
@@ -177,9 +183,12 @@ def run_autoforge(
     }
 
 
+# ── Handler ────────────────────────────────────────────────────────────────
+
+
 def handler(event):
     """
-    Runpod Serverless handler.
+    RunPod Serverless handler. Stage-based, stateless, structured output.
 
     Input (event["input"] or event for queue-based):
         image_url: URL to input image (required)
@@ -193,93 +202,102 @@ def handler(event):
         flatforge: bool (default False)
         cap_layers: int (default 0)
     """
+    work_dir = None
+
     try:
         job_id = event.get("id", "unknown")
 
-        # Support both queue-based (event["input"]) and direct calls
-        if "input" in event:
-            raw = event["input"]
-        else:
-            raw = event
+        # ── Phase 1: Validate ──────────────────────────────────────────
+        print(f"[validate] job_id={job_id}")
 
-        # Parse input
+        raw = event.get("input", event)
+
+        if not GITHUB_TOKEN:
+            return _fail("validate", "GITHUB_TOKEN environment variable not set")
+
         image_url = raw.get("image_url") or raw.get("image")
         if not image_url:
-            return {"error": "image_url is required", "status": "failed"}
+            return _fail("validate", "image_url is required")
 
+        csv_url = raw.get("csv_url") or raw.get("csv_file")
+        if not csv_url:
+            return _fail("validate", "csv_url is required")
+
+        # Parse numeric params with safe defaults
+        params = {
+            "pruning_max_colors": int(raw.get("pruning_max_colors", 8)),
+            "pruning_max_swaps": int(raw.get("pruning_max_swaps", 20)),
+            "layer_height": float(raw.get("layer_height", 0.04)),
+            "max_layers": int(raw.get("max_layers", 75)),
+            "iterations": int(raw.get("iterations", 2000)),
+            "flatforge": bool(raw.get("flatforge", False)),
+            "cap_layers": int(raw.get("cap_layers", 0)),
+        }
+        print(f"[validate] OK image_url={image_url} csv_url={csv_url} params={params}")
+
+        # ── Phase 2: Download ───────────────────────────────────────────
         work_dir = tempfile.mkdtemp(prefix="autoforge_")
-        print(f"[AutoForge] Work dir: {work_dir}")
-        print(f"[AutoForge] Image URL: {image_url}")
+        print(f"[download] work_dir={work_dir}")
 
-        # Download input image
-        local_image = download_file(image_url, work_dir)
+        local_image = _download_file(image_url, work_dir)
         if not local_image or not os.path.exists(local_image):
-            raise FileNotFoundError(f"Failed to download image from {image_url}")
+            return _fail("download", f"Failed to download image from {image_url}")
 
-        # Download optional material files
-        csv_path = download_file(raw.get("csv_url") or raw.get("csv_file"), work_dir)
-        json_path = download_file(raw.get("json_url") or raw.get("json_file"), work_dir)
+        csv_path = _download_file(csv_url, work_dir)
+        if not csv_path or not os.path.exists(csv_path):
+            return _fail("download", f"Failed to download CSV from {csv_url}")
 
-        # Run AutoForge
+        json_path = _download_file(raw.get("json_url") or raw.get("json_file"), work_dir)
+        print(f"[download] OK image={local_image} csv={csv_path}")
+
+        # ── Phase 3: Process (AutoForge pipeline) ───────────────────────
+        print(f"[process] starting AutoForge")
         result = run_autoforge(
             image_path=local_image,
             output_dir=work_dir,
             csv_path=csv_path,
             json_path=json_path,
-            pruning_max_colors=int(raw.get("pruning_max_colors", 8)),
-            pruning_max_swaps=int(raw.get("pruning_max_swaps", 20)),
-            layer_height=float(raw.get("layer_height", 0.04)),
-            max_layers=int(raw.get("max_layers", 75)),
-            iterations=int(raw.get("iterations", 2000)),
-            flatforge=bool(raw.get("flatforge", False)),
-            cap_layers=int(raw.get("cap_layers", 0)),
+            **params,
         )
+        print(f"[process] OK zip_size={result['zip_size_bytes']} bytes")
 
-        print(f"[AutoForge] Done. zip_size={result['zip_size_bytes']} bytes")
-        print(f"[AutoForge] Uploading to GitHub...")
+        # ── Phase 4: Package ────────────────────────────────────────────
+        # ZIP already created in run_autoforge — just verify it
+        zip_path = result["zip_path"]
+        if not os.path.exists(zip_path):
+            return _fail("package", f"ZIP not found at {zip_path}")
+        print(f"[package] OK zip={zip_path}")
 
-        # Upload to GitHub releases and get download URL
-        marker = f"MARKER_DEBUG_1234_HASH_{job_id[:8]}"
-        print(f"[AutoForge] {marker}")
-        print(f"[AutoForge] run_autoforge result keys: {list(result.keys())}")
-        print(f"[AutoForge] material_count={result.get('material_count')}, layer_count={result.get('layer_count')}, stl_files={result.get('stl_files')}, voxel={result.get('voxel_dimensions')}")
-        print(f"[AutoForge] wrapper result: {result}")
-
-        download_url = upload_to_github(
-            zip_path=result["zip_path"],
+        # ── Phase 5: Upload ─────────────────────────────────────────────
+        download_url = _upload_to_github(
+            zip_path=zip_path,
             job_id=job_id,
             material_count=result["material_count"],
             layer_count=result["layer_count"],
         )
+        print(f"[upload] OK url={download_url}")
 
-        print(f"[AutoForge] UPLOAD_COMPLETE marker={marker}")
-
-        ret = {
-            "status": "completed",
-            "download_url": download_url,
-            "zip_size_bytes": result["zip_size_bytes"],
-            "stl_files": result["stl_files"],
-            "material_count": result["material_count"],
-            "layer_count": result["layer_count"],
-            "voxel_dimensions": result["voxel_dimensions"],
-            "flatforge": result["flatforge"],
-            "_debug_marker": marker,
-            "_result_keys": list(result.keys()),
-            "_material_count_raw": result.get('material_count'),
-            "_layer_count_raw": result.get('layer_count'),
-        }
-        print(f"[AutoForge] Returning: {ret}")
-        return ret
+        # ── Phase 6: Return ─────────────────────────────────────────────
+        return _ok("return",
+            status="completed",
+            download_url=download_url,
+            zip_size_bytes=result["zip_size_bytes"],
+            material_count=result["material_count"],
+            layer_count=result["layer_count"],
+            stl_files=result["stl_files"],
+            voxel_dimensions=result["voxel_dimensions"],
+            flatforge=result["flatforge"],
+        )
 
     except Exception as e:
         import traceback
         tb = traceback.format_exc()
-        print(f"[AutoForge] Error: {e}\n{tb}")
-        return {"error": str(e), "status": "failed", "traceback": tb}
+        return _fail("process", str(e), traceback=tb)
 
     finally:
-        if "work_dir" in locals():
+        if work_dir and os.path.exists(work_dir):
             shutil.rmtree(work_dir, ignore_errors=True)
+            print(f"[cleanup] removed {work_dir}")
 
 
 if __name__ == "__main__":
