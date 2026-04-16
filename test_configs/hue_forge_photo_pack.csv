@@ -1,0 +1,5 @@
+Brand, Type, Color, Name, TD, Tags, Secondary_Type, Secondary_Color, Secondary_Strength, Owned, Uuid
+PolyTerra,PLA,#1c1c1c,Charcoal Black,0.3,,None,#0000ff,0,FALSE,{2590d566-07e4-4828-9c13-4d6b39192c71}
+PolyTerra,PLA,#6f727e,Fossil Grey,0.3,,None,#0000ff,0,FALSE,{6e006d8a-7788-94e5-fd32-42cdfcafb777}
+PolyLite,PLA,#e8e6d0,Natural,21,,None,#0000ff,0,FALSE,{8bcb2c01-32eb-81f3-382d-0182d6acafed}
+PolyLite,PLA,#e2dedb,White,5,,None,#0000ff,0,FALSE,{1800e8df-9e84-7c9a-088d-ac7b98baf869}
