@@ -1,0 +1,5 @@
+Brand,Type,Color,Name,TD,Dargs,Secondary_type,Secondary_Color,Secondary_Strength,Owned,Uuid
+Polymaker,PLA,#1c1c1c,Charcoal Black,0.3,,None,#0000ff,0,FALSE,{2590d566-07e4-4828-9c13-4d6b93192c7a}
+Polymaker,PLA,#6f723e,Fossil Grey,0.3,,None,#0000ff,0,FALSE,{6e006d8a-7788-94e5-fd32-42cdfcafb777}
+Polymaker,PLA,#e8e0de,Natural,0.21,,None,#0000ff,0,FALSE,{8bcb2c01-32eb-81f3-832d08d6acafed}
+Polymaker,PLA,#e2deda,White,0.05,,None,#0000ff,0,FALSE,{3180e8df-9e84-7c9a-088d-ac7b98baf869}
