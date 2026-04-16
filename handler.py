@@ -11,11 +11,14 @@ Strictly stage-based, stateless, structured output.
 
 import os
 import json
+import sys
+import time
 import tempfile
 import zipfile
 import shutil
 import urllib.request
 import urllib.parse
+import urllib.error
 from typing import Optional
 
 from autoforge_wrapper import AutoForgeWrapper
@@ -89,8 +92,22 @@ def _upload_to_github(zip_path: str, job_id: str, material_count: int, layer_cou
             "Accept": "application/vnd.github+json",
         }
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        release = json.loads(resp.read())
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            release = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        if e.code == 422:
+            # Tag already exists — find and reuse the existing release
+            existing_url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/tags/{urllib.parse.quote(tag_name)}"
+            req2 = urllib.request.Request(existing_url, headers={
+                "Authorization": f"token {GITHUB_TOKEN}",
+                "Accept": "application/vnd.github+json",
+            })
+            with urllib.request.urlopen(req2, timeout=10) as resp2:
+                release = json.loads(resp2.read())
+            print(f"[upload] Reusing existing release {release.get('id')} tag={tag_name}")
+        else:
+            raise
 
     release_id = release.get("id")
     upload_url = release.get("upload_url", "").replace(
@@ -103,17 +120,36 @@ def _upload_to_github(zip_path: str, job_id: str, material_count: int, layer_cou
     with open(zip_path, "rb") as f:
         zip_data = f.read()
 
-    req = urllib.request.Request(
-        upload_url, data=zip_data,
-        headers={
-            "Content-Type": "application/zip",
-            "Content-Length": str(len(zip_data)),
-            "Authorization": f"token {GITHUB_TOKEN}",
-            "Accept": "application/vnd.github+json",
-        },
-    )
-    with urllib.request.urlopen(req, timeout=300) as resp:
-        asset = json.loads(resp.read())
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            req = urllib.request.Request(
+                upload_url, data=zip_data,
+                headers={
+                    "Content-Type": "application/zip",
+                    "Content-Length": str(len(zip_data)),
+                    "Authorization": f"token {GITHUB_TOKEN}",
+                    "Accept": "application/vnd.github+json",
+                },
+            )
+            with urllib.request.urlopen(req, timeout=300) as resp:
+                asset = json.loads(resp.read())
+            break
+        except urllib.error.HTTPError as e:
+            if e.code == 422 and attempt < max_retries - 1:
+                # Asset name conflict — try with unique suffix
+                suffix = f"-{int(time.time())}"
+                upload_url_retry = release.get("upload_url", "").replace(
+                    "{?name,label}", f"?name={urllib.parse.quote(filename.replace('.zip', f'{suffix}.zip'))}"
+                )
+                upload_url = upload_url_retry
+                print(f"[upload] Retrying with unique filename (attempt {attempt+1})")
+                continue
+            elif e.code == 422:
+                error_body = e.read().decode() if e.fp else ""
+                raise RuntimeError(f"GitHub upload failed after {max_retries} attempts: 422 {error_body}")
+            else:
+                raise
 
     download_url = asset.get("browser_download_url", html_url)
     print(f"[upload] Asset URL: {download_url}")
@@ -323,7 +359,7 @@ def _run_from_env():
 
     # Build an event dict that handler() understands
     # Use a deterministic job_id from timestamp + pid
-    job_id = f"local-{int(time.time())}-{os.getpid()}"
+    job_id = f"local-{int(time.time())}-{os.getpid()}-{id(config) % 10000:04d}"
     event = {"id": job_id, "input": config}
 
     print(f"[khris-gpu] Starting AutoForge job {job_id}")

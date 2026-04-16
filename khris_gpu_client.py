@@ -222,7 +222,8 @@ class KhrisGPUClient:
 
         payload = {
             "image": AUTOFORGE_IMAGE,
-            "command": "python3 /app/handler.py",
+            "command": "python3 -u /app/handler.py",
+            "entrypoint": "",
             "shm_size": "4g",  # AutoForge needs more shared memory
             "network": "host",  # LAN access for pulling models / uploading to GitHub
             "env": {
