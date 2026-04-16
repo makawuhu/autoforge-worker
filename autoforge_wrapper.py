@@ -24,6 +24,8 @@ class AutoForgeWrapper:
         layer_height: float = 0.04,
         max_layers: int = 75,
         iterations: int = 2000,
+        background_height: Optional[float] = None,
+        nozzle_diameter: Optional[float] = None,
         flatforge: bool = False,
         cap_layers: int = 0,
         **kwargs,
@@ -58,6 +60,10 @@ class AutoForgeWrapper:
             "--iterations", str(iterations),
         ]
 
+        if background_height is not None:
+            cmd.extend(["--background_height", str(background_height)])
+        if nozzle_diameter is not None:
+            cmd.extend(["--nozzle_diameter", str(nozzle_diameter)])
         if csv_file:
             cmd.extend(["--csv_file", csv_file])
         if json_file:

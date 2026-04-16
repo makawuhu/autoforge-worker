@@ -183,6 +183,8 @@ class KhrisGPUClient:
         layer_height: float = 0.04,
         max_layers: int = 75,
         iterations: int = 2000,
+        background_height: float = None,
+        nozzle_diameter: float = None,
         flatforge: bool = False,
         cap_layers: int = 0,
         priority: int = 0,
@@ -216,6 +218,10 @@ class KhrisGPUClient:
         }
         if json_url:
             autoforge_config["json_url"] = json_url
+        if background_height is not None:
+            autoforge_config["background_height"] = background_height
+        if nozzle_diameter is not None:
+            autoforge_config["nozzle_diameter"] = nozzle_diameter
 
         # Serialize config as env var — handler.py reads AUTOFORGE_CONFIG
         config_json = json.dumps(autoforge_config)
@@ -327,6 +333,8 @@ if __name__ == "__main__":
     s.add_argument("--iterations", type=int, default=200)
     s.add_argument("--layer-height", type=float, default=0.04)
     s.add_argument("--max-layers", type=int, default=75)
+    s.add_argument("--background-height", type=float, default=None, help="Background height in mm (auto-calculated if omitted)")
+    s.add_argument("--nozzle-diameter", type=float, default=None, help="Nozzle diameter in mm")
     s.add_argument("--timeout", type=int, default=1800, help="Job timeout in seconds")
     s.add_argument("--wait", action="store_true", help="Wait for completion")
 
@@ -367,6 +375,8 @@ if __name__ == "__main__":
             iterations=args.iterations,
             layer_height=args.layer_height,
             max_layers=args.max_layers,
+            background_height=args.background_height,
+            nozzle_diameter=args.nozzle_diameter,
             timeout_seconds=args.timeout,
         )
         print(json.dumps(job, indent=2))

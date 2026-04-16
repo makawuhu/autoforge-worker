@@ -11,6 +11,7 @@ Strictly stage-based, stateless, structured output.
 
 import os
 import json
+import math
 import sys
 import time
 import tempfile
@@ -156,6 +157,23 @@ def _upload_to_github(zip_path: str, job_id: str, material_count: int, layer_cou
     return download_url
 
 
+# ── Background Height Calculation ───────────────────────────────────────────
+
+def _bg_height(layer_height: float) -> float:
+    """
+    Calculate optimal background height based on layer height.
+    Ensures enough base layers for structural integrity.
+    Formula: n = max(7, ceil(0.56 / layer_height)), bg_height = n * layer_height
+    The while loop ensures n * layer_height is an integer multiple of layer_height.
+    """
+    lh = float(layer_height)
+    n = max(7, math.ceil(0.56 / lh))
+    # Ensure clean integer layer count
+    while not (round(n * lh, 6) / lh).is_integer():
+        n += 1
+    return round(n * lh, 6)
+
+
 # ── Core Pipeline ──────────────────────────────────────────────────────────
 
 
@@ -169,6 +187,8 @@ def run_autoforge(
     layer_height: float = 0.04,
     max_layers: int = 75,
     iterations: int = 2000,
+    background_height: Optional[float] = None,
+    nozzle_diameter: Optional[float] = None,
     flatforge: bool = False,
     cap_layers: int = 0,
 ) -> dict:
@@ -189,6 +209,8 @@ def run_autoforge(
         layer_height=layer_height,
         max_layers=max_layers,
         iterations=iterations,
+        background_height=background_height,
+        nozzle_diameter=nozzle_diameter,
         flatforge=flatforge,
         cap_layers=cap_layers,
     )
@@ -263,12 +285,25 @@ def handler(event):
             return _fail("validate", "csv_url is required")
 
         # Parse numeric params with safe defaults
+        # Calculate background_height dynamically if not explicitly provided
+        layer_height = float(raw.get("layer_height", 0.04))
+        bg_height_raw = raw.get("background_height")
+        if bg_height_raw is not None:
+            background_height = float(bg_height_raw)
+        else:
+            background_height = _bg_height(layer_height)
+
+        nozzle_diameter_raw = raw.get("nozzle_diameter")
+        nozzle_diameter = float(nozzle_diameter_raw) if nozzle_diameter_raw is not None else None
+
         params = {
             "pruning_max_colors": int(raw.get("pruning_max_colors", 8)),
             "pruning_max_swaps": int(raw.get("pruning_max_swaps", 20)),
-            "layer_height": float(raw.get("layer_height", 0.04)),
+            "layer_height": layer_height,
             "max_layers": int(raw.get("max_layers", 75)),
             "iterations": int(raw.get("iterations", 2000)),
+            "background_height": background_height,
+            "nozzle_diameter": nozzle_diameter,
             "flatforge": bool(raw.get("flatforge", False)),
             "cap_layers": int(raw.get("cap_layers", 0)),
         }
