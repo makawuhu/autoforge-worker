@@ -117,7 +117,7 @@ def _upload_to_github(zip_path: str, job_id: str, material_count: int, layer_cou
     html_url = release.get("html_url")
     print(f"[upload] Created release {release_id} tag={tag_name}")
 
-    # Upload asset
+    # Upload asset with retries (handles SSL timeouts and connection errors)
     with open(zip_path, "rb") as f:
         zip_data = f.read()
 
@@ -133,17 +133,16 @@ def _upload_to_github(zip_path: str, job_id: str, material_count: int, layer_cou
                     "Accept": "application/vnd.github+json",
                 },
             )
-            with urllib.request.urlopen(req, timeout=300) as resp:
+            with urllib.request.urlopen(req, timeout=600) as resp:
                 asset = json.loads(resp.read())
             break
         except urllib.error.HTTPError as e:
             if e.code == 422 and attempt < max_retries - 1:
                 # Asset name conflict — try with unique suffix
                 suffix = f"-{int(time.time())}"
-                upload_url_retry = release.get("upload_url", "").replace(
+                upload_url = release.get("upload_url", "").replace(
                     "{?name,label}", f"?name={urllib.parse.quote(filename.replace('.zip', f'{suffix}.zip'))}"
                 )
-                upload_url = upload_url_retry
                 print(f"[upload] Retrying with unique filename (attempt {attempt+1})")
                 continue
             elif e.code == 422:
@@ -151,6 +150,14 @@ def _upload_to_github(zip_path: str, job_id: str, material_count: int, layer_cou
                 raise RuntimeError(f"GitHub upload failed after {max_retries} attempts: 422 {error_body}")
             else:
                 raise
+        except (urllib.error.URLError, OSError, ConnectionError) as e:
+            if attempt < max_retries - 1:
+                wait = 5 * (attempt + 1)
+                print(f"[upload] Connection error on attempt {attempt+1}: {e}. Retrying in {wait}s...")
+                time.sleep(wait)
+                continue
+            else:
+                raise RuntimeError(f"GitHub upload failed after {max_retries} attempts: {e}")
 
     download_url = asset.get("browser_download_url", html_url)
     print(f"[upload] Asset URL: {download_url}")
